@@ -54,7 +54,9 @@ Variables utiles:
 - `TELEGRAM_WEBHOOK_SECRET`: opcional para validar el webhook
 - `COINGECKO_API_KEY`: opcional; si no existe, se usa la API publica de CoinGecko
 - `COINGECKO_API_PLAN`: `demo` por defecto; usa `pro` si tu clave es del plan Pro de CoinGecko
-- `POLYGON_API_KEY`: activa el scanner live de equities tematicas y la revision de posiciones en acciones
+- `TWELVEDATA_API_KEY`: recomendado como proveedor gratuito inicial para acciones USA
+- `TWELVEDATA_SCAN_LIMIT`: `8` por defecto para respetar mejor el free tier de Twelve Data
+- `POLYGON_API_KEY`: proveedor alternativo de equities; en muchos planes gratuitos no permite snapshot de acciones
 - `INTERNAL_JOB_TOKEN`: protege el endpoint interno usado por Cloud Scheduler
 
 ## Endpoints principales
@@ -86,9 +88,15 @@ Tambien entiende frases como `he comprado PLTR a 21.5` o `analiza PLTR`.
 
 ## Comportamiento actual de recomendaciones
 
-- Discovery: envia oportunidades nuevas como `compra potencial manual` o `vigilar`, con datos live de CoinGecko y de Polygon si configuras `POLYGON_API_KEY`.
+- Discovery: envia oportunidades nuevas como `compra potencial manual` o `vigilar`, con datos live de CoinGecko para cripto y Twelve Data o Polygon para acciones.
 - Cartera: si registras una compra manual, el job puede enviarte `revisar venta o reducir manualmente` o `revision urgente manual` cuando detecta deterioro, objetivo alcanzado o sobreextension.
 - Ejecucion: no ejecuta operaciones; solo analiza y te manda alertas razonadas por Telegram para que decidas tu.
+
+## Nota sobre acciones en plan gratuito
+
+- Twelve Data encaja mejor como proveedor gratuito inicial para equities USA, pero su free tier tiene limite de creditos por minuto.
+- Por eso el scanner rota automaticamente por bloques pequenos de simbolos en cada barrido cuando usa Twelve Data.
+- Polygon puede mantenerse como proveedor secundario, pero segun el plan puede devolver `403` en endpoints de snapshot.
 
 ## Siguiente capa recomendada
 

@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     polygon_api_key: str = ""
     coingecko_api_key: str = ""
     coingecko_api_plan: str = "demo"
+    twelvedata_api_key: str = ""
+    twelvedata_scan_limit: int = 8
     max_alerts_per_day: int = 3
     internal_job_token: str = ""
     upstash_redis_rest_url: str = ""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 
 import httpx
 
@@ -14,31 +15,45 @@ class MarketDataService:
     COINGECKO_PUBLIC_BASE_URL = "https://api.coingecko.com/api/v3"
     COINGECKO_PRO_BASE_URL = "https://pro-api.coingecko.com/api/v3"
     POLYGON_BASE_URL = "https://api.polygon.io"
+    TWELVEDATA_BASE_URL = "https://api.twelvedata.com"
     STABLECOIN_SYMBOLS = {"USDT", "USDC", "DAI", "FDUSD", "PYUSD", "USDE", "USDS"}
 
     def __init__(self) -> None:
         self.settings = get_settings()
 
     async def fetch_live_candidates(self, profile: UserProfile) -> list[CandidateInput]:
-        candidates: list[CandidateInput] = []
+        candidates_by_symbol: dict[str, CandidateInput] = {}
         try:
-            candidates.extend(await self._fetch_coingecko_candidates(profile))
+            for candidate in await self._fetch_coingecko_candidates(profile):
+                candidates_by_symbol[candidate.symbol] = candidate
         except Exception:
             pass
         try:
-            candidates.extend(await self._fetch_polygon_candidates(profile))
+            for candidate in await self._fetch_twelvedata_candidates(profile):
+                candidates_by_symbol.setdefault(candidate.symbol, candidate)
         except Exception:
             pass
-        return candidates
+        try:
+            for candidate in await self._fetch_polygon_candidates(profile):
+                candidates_by_symbol.setdefault(candidate.symbol, candidate)
+        except Exception:
+            pass
+        return list(candidates_by_symbol.values())
 
     async def diagnose_live_sources(self, profile: UserProfile) -> dict[str, object]:
         coingecko_status = await self._diagnose_coingecko(profile)
+        twelvedata_status = await self._diagnose_twelvedata(profile)
         polygon_status = await self._diagnose_polygon(profile)
-        total_candidates = int(coingecko_status["candidates"]) + int(polygon_status["candidates"])
+        total_candidates = (
+            int(coingecko_status["candidates"])
+            + int(twelvedata_status["candidates"])
+            + int(polygon_status["candidates"])
+        )
         return {
             "ok": total_candidates > 0,
             "total_candidates": total_candidates,
             "coingecko": coingecko_status,
+            "twelvedata": twelvedata_status,
             "polygon": polygon_status,
         }
 
@@ -52,6 +67,9 @@ class MarketDataService:
         if asset_type == AssetType.CRYPTO:
             candidates = await self._fetch_crypto_candidates_for_symbols([normalized], profile)
             return candidates[0] if candidates else None
+        candidates = await self._fetch_twelvedata_quotes([normalized], profile)
+        if candidates:
+            return candidates[0]
         candidates = await self._fetch_polygon_snapshots([normalized], profile)
         return candidates[0] if candidates else None
 
@@ -107,6 +125,72 @@ class MarketDataService:
         symbols = [item["symbol"] for item in thematic_universe]
         return await self._fetch_polygon_snapshots(symbols, profile)
 
+    async def _fetch_twelvedata_candidates(self, profile: UserProfile) -> list[CandidateInput]:
+        thematic_universe = self._equity_universe_for_profile(profile)
+        symbols = self._twelvedata_symbol_slice([item["symbol"] for item in thematic_universe])
+        return await self._fetch_twelvedata_quotes(symbols, profile)
+
+    async def _fetch_twelvedata_quotes(
+        self,
+        symbols: list[str],
+        profile: UserProfile,
+    ) -> list[CandidateInput]:
+        if not self.settings.twelvedata_api_key or not symbols:
+            return []
+        metadata = {item["symbol"]: item for item in THEMATIC_EQUITY_UNIVERSE}
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.get(
+                f"{self.TWELVEDATA_BASE_URL}/quote",
+                params={
+                    "symbol": ",".join(symbols),
+                    "apikey": self.settings.twelvedata_api_key,
+                    "interval": "1day",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+        rows = self._normalize_twelvedata_batch_payload(payload)
+        candidates: list[CandidateInput] = []
+        for symbol, row in rows.items():
+            meta = metadata.get(symbol, {"name": symbol, "themes": SEED_THEME_MAP.get(symbol, ["growth"])})
+            price = self._to_float(row.get("close")) or self._to_float(row.get("price"))
+            prev_close = self._to_float(row.get("previous_close"))
+            if price is None or price <= 0:
+                continue
+            change_24h = self._to_float(row.get("percent_change"))
+            if change_24h is None and prev_close and prev_close > 0:
+                change_24h = ((price - prev_close) / prev_close) * 100
+            volume = self._to_float(row.get("volume"))
+            dollar_volume = volume * price if volume is not None else None
+            if dollar_volume is not None and dollar_volume < 5_000_000:
+                continue
+            themes = list(meta["themes"])
+            momentum_score = self._clamp(((change_24h or 0.0) + 4.0) / 10.0)
+            liquidity_score = self._liquidity_score(dollar_volume)
+            narrative_strength = self._clamp(0.30 + 0.26 * momentum_score + 0.18 * min(1.0, 0.16 * len(themes)) + 0.14 * liquidity_score)
+            catalyst_strength = self._clamp(0.28 + 0.34 * momentum_score + 0.18 * liquidity_score)
+            candidates.append(
+                CandidateInput(
+                    symbol=symbol,
+                    name=str(meta["name"]),
+                    asset_type=AssetType.EQUITY,
+                    source="twelvedata",
+                    themes=themes,
+                    narrative_strength=narrative_strength,
+                    catalyst_strength=catalyst_strength,
+                    liquidity_score=liquidity_score,
+                    volatility_score=self._clamp(abs(change_24h or 0.0) / 10.0),
+                    current_price=price,
+                    price_change_percentage_24h=change_24h,
+                    price_change_percentage_7d=None,
+                    market_cap=None,
+                    market_cap_rank=None,
+                    dollar_volume=dollar_volume,
+                )
+            )
+        return candidates
+
     async def _diagnose_coingecko(self, profile: UserProfile) -> dict[str, object]:
         plan = (self.settings.coingecko_api_plan or "demo").strip().lower()
         try:
@@ -124,6 +208,28 @@ class MarketDataService:
                 "plan": plan,
                 "ok": False,
                 "candidates": 0,
+                "error": str(exc),
+            }
+
+    async def _diagnose_twelvedata(self, profile: UserProfile) -> dict[str, object]:
+        symbols = self._twelvedata_symbol_slice([item["symbol"] for item in self._equity_universe_for_profile(profile)])
+        try:
+            candidates = await self._fetch_twelvedata_quotes(symbols, profile)
+            return {
+                "configured": bool(self.settings.twelvedata_api_key),
+                "ok": len(candidates) > 0,
+                "candidates": len(candidates),
+                "symbols_checked": symbols,
+                "scan_limit": self.settings.twelvedata_scan_limit,
+                "error": None,
+            }
+        except Exception as exc:
+            return {
+                "configured": bool(self.settings.twelvedata_api_key),
+                "ok": False,
+                "candidates": 0,
+                "symbols_checked": symbols,
+                "scan_limit": self.settings.twelvedata_scan_limit,
                 "error": str(exc),
             }
 
@@ -433,6 +539,16 @@ class MarketDataService:
             headers["x-cg-demo-api-key"] = self.settings.coingecko_api_key
         return base_url, headers
 
+    def _twelvedata_symbol_slice(self, symbols: list[str]) -> list[str]:
+        limit = max(1, self.settings.twelvedata_scan_limit)
+        if len(symbols) <= limit:
+            return symbols
+        total_windows = math.ceil(len(symbols) / limit)
+        window_index = int(datetime.now(timezone.utc).timestamp() // 900) % total_windows
+        start = window_index * limit
+        end = start + limit
+        return symbols[start:end]
+
     def _equity_universe_for_profile(self, profile: UserProfile) -> list[dict[str, object]]:
         preferred_themes = {theme for theme, weight in profile.theme_weights.items() if weight >= 0.05}
         selected = [
@@ -465,6 +581,41 @@ class MarketDataService:
             or MarketDataService._to_float(MarketDataService._dig(row, "min", "c"))
             or MarketDataService._to_float(MarketDataService._dig(row, "day", "c"))
         )
+
+    @staticmethod
+    def _normalize_twelvedata_batch_payload(payload: object) -> dict[str, dict[str, object]]:
+        if isinstance(payload, list):
+            rows: dict[str, dict[str, object]] = {}
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol", "")).upper()
+                if symbol:
+                    rows[symbol] = item
+            return rows
+
+        if not isinstance(payload, dict):
+            return {}
+
+        if payload.get("status") == "error":
+            message = str(payload.get("message", "unknown Twelve Data error"))
+            raise ValueError(message)
+
+        symbol = str(payload.get("symbol", "")).upper()
+        if symbol:
+            return {symbol: payload}
+
+        rows: dict[str, dict[str, object]] = {}
+        for key, value in payload.items():
+            if not isinstance(value, dict):
+                continue
+            nested_symbol = str(value.get("symbol", key)).upper()
+            status = str(value.get("status", "")).lower()
+            if status == "error":
+                continue
+            if nested_symbol:
+                rows[nested_symbol] = value
+        return rows
 
     @staticmethod
     def _dig(data: dict[str, object], *keys: str) -> object:
