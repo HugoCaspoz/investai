@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,10 +8,15 @@ from apps.api.investai_api.api.telegram import router as telegram_router
 from apps.api.investai_api.config import get_settings
 from apps.api.investai_api.db import Base, engine
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        logger.exception("Database initialization failed during startup")
     yield
 
 

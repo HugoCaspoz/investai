@@ -40,9 +40,16 @@ docs/
 3. Copia `.env.example` a `.env`
 4. Arranca la API con `uvicorn apps.api.main:app --reload`
 
+Para Cloud Run:
+
+1. Copia `env.cloudrun.yaml.example` a `env.cloudrun.yaml`
+2. Rellena los valores reales
+3. Ejecuta `gcloud run deploy ... --env-vars-file env.cloudrun.yaml`
+
 Variables utiles:
 
 - `DATABASE_URL`: por defecto `sqlite:///./investai.db`
+  - Para Neon, si te dan `postgresql://...`, la app ahora lo adapta automaticamente a `postgresql+psycopg://...`
 - `TELEGRAM_BOT_TOKEN`: necesario para enviar mensajes reales a Telegram
 - `TELEGRAM_WEBHOOK_SECRET`: opcional para validar el webhook
 - `INTERNAL_JOB_TOKEN`: protege el endpoint interno usado por Cloud Scheduler
