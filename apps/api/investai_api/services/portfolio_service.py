@@ -35,6 +35,16 @@ class PortfolioService:
         )
         return list(session.scalars(statement))
 
+    def get_open_position_by_symbol(self, session: Session, profile_id: int, symbol: str) -> Position | None:
+        statement = (
+            select(Position)
+            .where(Position.profile_id == profile_id)
+            .where(Position.status == PositionStatus.OPEN.value)
+            .where(Position.symbol == symbol.upper())
+            .order_by(Position.opened_at.desc())
+        )
+        return session.scalar(statement)
+
     @staticmethod
     def render_positions(positions: list[Position]) -> str:
         if not positions:

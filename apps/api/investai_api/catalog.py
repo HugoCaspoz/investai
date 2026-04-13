@@ -109,6 +109,36 @@ DEMO_CANDIDATES: list[dict[str, object]] = [
     },
 ]
 
+THEMATIC_EQUITY_UNIVERSE: list[dict[str, object]] = [
+    {"symbol": "PLTR", "name": "Palantir Technologies", "themes": ["ai_software", "growth", "strong_catalyst"]},
+    {"symbol": "SNOW", "name": "Snowflake", "themes": ["ai_software", "growth"]},
+    {"symbol": "NET", "name": "Cloudflare", "themes": ["ai_software", "growth", "strong_narrative"]},
+    {"symbol": "DDOG", "name": "Datadog", "themes": ["ai_software", "growth"]},
+    {"symbol": "ARM", "name": "Arm Holdings", "themes": ["ai_software", "growth", "strong_narrative"]},
+    {"symbol": "TSLA", "name": "Tesla", "themes": ["ev", "growth", "strong_narrative"]},
+    {"symbol": "RIVN", "name": "Rivian Automotive", "themes": ["ev", "growth", "small_mid_growth"]},
+    {"symbol": "LCID", "name": "Lucid Group", "themes": ["ev", "small_mid_growth", "strong_narrative"]},
+    {"symbol": "COIN", "name": "Coinbase Global", "themes": ["crypto_infra", "growth", "strong_catalyst"]},
+    {"symbol": "MSTR", "name": "Strategy", "themes": ["crypto_infra", "growth", "strong_narrative"]},
+    {"symbol": "HOOD", "name": "Robinhood Markets", "themes": ["crypto_infra", "growth"]},
+    {"symbol": "IREN", "name": "Iris Energy", "themes": ["crypto_infra", "growth", "small_mid_growth", "strong_catalyst"]},
+    {"symbol": "CORZ", "name": "Core Scientific", "themes": ["crypto_infra", "small_mid_growth", "strong_catalyst"]},
+    {"symbol": "CLSK", "name": "CleanSpark", "themes": ["crypto_infra", "small_mid_growth", "growth"]},
+    {"symbol": "RIOT", "name": "Riot Platforms", "themes": ["crypto_infra", "small_mid_growth", "growth"]},
+    {"symbol": "MARA", "name": "MARA Holdings", "themes": ["crypto_infra", "growth", "strong_narrative"]},
+    {"symbol": "CRCL", "name": "Circle Internet Group", "themes": ["crypto_infra", "growth", "strong_catalyst"]},
+    {"symbol": "OKLO", "name": "Oklo", "themes": ["nuclear", "small_mid_growth", "strong_catalyst"]},
+    {"symbol": "SMR", "name": "NuScale Power", "themes": ["nuclear", "growth", "strong_catalyst"]},
+    {"symbol": "CCJ", "name": "Cameco", "themes": ["nuclear", "strong_catalyst"]},
+    {"symbol": "UEC", "name": "Uranium Energy", "themes": ["nuclear", "small_mid_growth", "strong_catalyst"]},
+    {"symbol": "UUUU", "name": "Energy Fuels", "themes": ["nuclear", "small_mid_growth"]},
+    {"symbol": "LEU", "name": "Centrus Energy", "themes": ["nuclear", "strong_catalyst", "small_mid_growth"]},
+    {"symbol": "RKLB", "name": "Rocket Lab", "themes": ["growth", "strong_catalyst", "strong_narrative"]},
+    {"symbol": "ASTS", "name": "AST SpaceMobile", "themes": ["growth", "small_mid_growth", "strong_narrative"]},
+    {"symbol": "SOUN", "name": "SoundHound AI", "themes": ["ai_software", "small_mid_growth", "growth"]},
+    {"symbol": "BBAI", "name": "BigBear.ai", "themes": ["ai_software", "small_mid_growth", "growth"]},
+]
+
 
 def bucket_for_themes(themes: list[str]) -> str:
     if "crypto_infra" in themes:

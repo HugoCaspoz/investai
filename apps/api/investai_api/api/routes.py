@@ -103,12 +103,27 @@ def evaluate_signal(payload: SignalEvaluationRequest, session: Session = Depends
     return signal_engine.evaluate(session, profile, payload)
 
 
-@router.post("/jobs/scan-demo")
-async def run_demo_scan(
+async def _run_scan_job(
     session: Session = Depends(get_session),
     x_internal_job_token: str | None = Header(default=None, alias="X-Internal-Job-Token"),
 ) -> dict[str, int | str]:
     if settings.internal_job_token and x_internal_job_token != settings.internal_job_token:
         raise HTTPException(status_code=403, detail="Invalid job token")
-    result = await job_service.run_demo_scan(session)
+    result = await job_service.run_scan(session)
     return {"status": "ok", **result}
+
+
+@router.post("/jobs/scan")
+async def run_scan(
+    session: Session = Depends(get_session),
+    x_internal_job_token: str | None = Header(default=None, alias="X-Internal-Job-Token"),
+) -> dict[str, int | str]:
+    return await _run_scan_job(session, x_internal_job_token)
+
+
+@router.post("/jobs/scan-demo")
+async def run_demo_scan_compat(
+    session: Session = Depends(get_session),
+    x_internal_job_token: str | None = Header(default=None, alias="X-Internal-Job-Token"),
+) -> dict[str, int | str]:
+    return await _run_scan_job(session, x_internal_job_token)

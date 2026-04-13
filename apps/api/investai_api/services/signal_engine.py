@@ -12,9 +12,50 @@ class SignalEngine:
     def __init__(self) -> None:
         self.discovery_service = DiscoveryService()
 
+    def preview(
+        self,
+        profile: UserProfile | None,
+        payload: SignalEvaluationRequest,
+    ) -> SignalRead:
+        return self._evaluate(profile, payload)
+
     def evaluate(
         self,
         session: Session,
+        profile: UserProfile | None,
+        payload: SignalEvaluationRequest,
+    ) -> SignalRead:
+        signal = self._evaluate(profile, payload)
+        snapshot = SignalSnapshot(
+            profile_id=profile.id if profile else None,
+            symbol=signal.symbol,
+            asset_type=signal.asset_type.value,
+            signal_type=signal.signal_type.value,
+            alert_priority=signal.alert_priority.value,
+            bucket=signal.bucket,
+            score=signal.score,
+            confidence=signal.confidence,
+            risk_level=signal.risk_level,
+            summary=signal.summary,
+            rationale={
+                "manual_recommendation": signal.manual_recommendation,
+                "execution_mode": signal.execution_mode,
+                "action_hint": signal.action_hint,
+                "reasons_for": signal.reasons_for,
+                "reasons_against": signal.reasons_against,
+                "subscores": signal.subscores,
+                "context_notes": payload.context_notes,
+            },
+        )
+        session.add(snapshot)
+        session.commit()
+        session.refresh(snapshot)
+
+        signal.id = snapshot.id
+        return signal
+
+    def _evaluate(
+        self,
         profile: UserProfile | None,
         payload: SignalEvaluationRequest,
     ) -> SignalRead:
@@ -62,7 +103,13 @@ class SignalEngine:
         )
         risk_level = self._risk_level(payload.volatility_score, payload.liquidity_quality, payload.event_risk)
         alert_priority = self._priority(signal_type, score, risk_level)
-        reasons_for, reasons_against = self._reasons(payload, technical_setup, profile_fit)
+        buy_reasons, sell_reasons = self._reason_buckets(payload, technical_setup, profile_fit)
+        if signal_type in {SignalType.SELL, SignalType.CRITICAL_NEWS}:
+            reasons_for = sell_reasons or ["hay senales suficientes para revisar la posicion"]
+            reasons_against = buy_reasons[:3]
+        else:
+            reasons_for = buy_reasons or ["no hay confirmaciones suficientes; de momento solo vigilancia"]
+            reasons_against = sell_reasons[:3]
         bucket = payload.bucket or bucket_for_themes(payload.themes)
         subscores = {
             "technical_setup": round(technical_setup, 3),
@@ -70,77 +117,68 @@ class SignalEngine:
             "buy_score": round(buy_score, 3),
             "sell_score": round(sell_score, 3),
         }
+        manual_recommendation = self._manual_recommendation(signal_type)
+        action_hint = self._action_hint(signal_type)
         summary = self._summary(signal_type, payload.symbol.upper(), score, bucket, reasons_for)
 
-        snapshot = SignalSnapshot(
-            profile_id=profile.id if profile else None,
-            symbol=payload.symbol.upper(),
-            asset_type=payload.asset_type.value,
-            signal_type=signal_type.value,
-            alert_priority=alert_priority.value,
-            bucket=bucket,
-            score=round(score, 3),
-            confidence=round(confidence, 3),
-            risk_level=risk_level,
-            summary=summary,
-            rationale={
-                "reasons_for": reasons_for,
-                "reasons_against": reasons_against,
-                "subscores": subscores,
-                "context_notes": payload.context_notes,
-            },
-        )
-        session.add(snapshot)
-        session.commit()
-        session.refresh(snapshot)
-
         return SignalRead(
-            id=snapshot.id,
-            symbol=snapshot.symbol,
-            asset_type=AssetType(snapshot.asset_type),
-            signal_type=SignalType(snapshot.signal_type),
-            alert_priority=AlertPriority(snapshot.alert_priority),
+            symbol=payload.symbol.upper(),
+            asset_type=payload.asset_type,
+            source=payload.source,
+            signal_type=signal_type,
+            alert_priority=alert_priority,
             bucket=bucket,
             score=round(score, 3),
             confidence=round(confidence, 3),
             risk_level=risk_level,
             summary=summary,
+            manual_recommendation=manual_recommendation,
+            execution_mode="manual_only",
+            action_hint=action_hint,
             reasons_for=reasons_for,
             reasons_against=reasons_against,
             subscores=subscores,
         )
 
-    def _reasons(
+    def _reason_buckets(
         self,
         payload: SignalEvaluationRequest,
         technical_setup: float,
         profile_fit: float,
     ) -> tuple[list[str], list[str]]:
-        reasons_for: list[str] = []
-        reasons_against: list[str] = []
+        buy_reasons: list[str] = []
+        sell_reasons: list[str] = []
         if technical_setup >= 0.65:
-            reasons_for.append("estructura tecnica favorable o correccion controlada")
+            buy_reasons.append("estructura tecnica favorable o correccion controlada")
         if payload.relative_strength >= 0.65:
-            reasons_for.append("relative strength por encima de la media del bucket")
+            buy_reasons.append("relative strength por encima de la media del bucket")
         if payload.catalyst_score >= 0.65:
-            reasons_for.append("catalizador reciente con impacto potencial relevante")
+            buy_reasons.append("catalizador reciente con impacto potencial relevante")
         if payload.narrative_strength >= 0.65:
-            reasons_for.append("narrativa sectorial todavia fuerte")
+            buy_reasons.append("narrativa sectorial todavia fuerte")
+        if payload.price_change_percentage_24h is not None and payload.price_change_percentage_24h >= 4:
+            buy_reasons.append(f"subida reciente de {payload.price_change_percentage_24h:.1f}% en 24h")
+        if payload.price_change_percentage_7d is not None and payload.price_change_percentage_7d >= 8:
+            buy_reasons.append(f"continuidad de momentum: {payload.price_change_percentage_7d:.1f}% en 7d")
+        if payload.dollar_volume is not None and payload.dollar_volume >= 100_000_000:
+            buy_reasons.append("volumen negociado alto para una alerta seria")
         if profile_fit >= 0.55:
-            reasons_for.append("encaja con tu perfil inferido a partir de las semillas")
+            buy_reasons.append("encaja con tu perfil inferido a partir de las semillas")
         if payload.liquidity_quality <= 0.45:
-            reasons_against.append("liquidez justa para una entrada disciplinada")
+            sell_reasons.append("liquidez justa para una entrada disciplinada")
         if payload.volatility_score >= 0.80:
-            reasons_against.append("volatilidad alta; conviene tamano prudente")
+            sell_reasons.append("volatilidad alta; conviene tamano prudente")
+        if payload.price_change_percentage_24h is not None and payload.price_change_percentage_24h <= -5:
+            sell_reasons.append(f"caida agresiva de {payload.price_change_percentage_24h:.1f}% en 24h")
         if payload.event_risk >= 0.70:
-            reasons_against.append("riesgo de evento cercano que puede distorsionar la lectura")
+            sell_reasons.append("riesgo de evento cercano que puede distorsionar la lectura")
         if payload.technical_deterioration >= 0.60:
-            reasons_against.append("debilitamiento tecnico visible en la estructura")
+            sell_reasons.append("debilitamiento tecnico visible en la estructura")
         if payload.thesis_break_risk >= 0.60:
-            reasons_against.append("la tesis podria estar perdiendo calidad")
-        if not reasons_for:
-            reasons_for.append("no hay confirmaciones suficientes; de momento solo vigilancia")
-        return reasons_for, reasons_against
+            sell_reasons.append("la tesis podria estar perdiendo calidad")
+        if payload.target_or_extension_score >= 0.60:
+            sell_reasons.append("objetivo cumplido o sobreextension suficiente para revisar")
+        return buy_reasons, sell_reasons
 
     def _summary(
         self,
@@ -153,12 +191,12 @@ class SignalEngine:
         confidence_label = self._confidence_label(score)
         main_reason = reasons_for[0]
         if signal_type == SignalType.BUY:
-            return f"{symbol} entra en zona interesante. Senal de compra {confidence_label}. Bucket: {bucket}. Motivo principal: {main_reason}."
+            return f"{symbol} entra en zona interesante. Recomendacion: compra potencial {confidence_label}. Bucket: {bucket}. Motivo principal: {main_reason}."
         if signal_type == SignalType.SELL:
-            return f"{symbol} merece revision de venta o reduccion. Senal {confidence_label}. Motivo principal: {main_reason}."
+            return f"{symbol} merece revision manual de venta o reduccion. Senal {confidence_label}. Motivo principal: {main_reason}."
         if signal_type == SignalType.CRITICAL_NEWS:
-            return f"{symbol} activa alerta critica. Hay razones para revisar la tesis cuanto antes. Motivo principal: {main_reason}."
-        return f"{symbol} queda en vigilancia. Senal {confidence_label}. Motivo principal: {main_reason}."
+            return f"{symbol} activa alerta critica. Recomendacion: revisar manualmente la tesis cuanto antes. Motivo principal: {main_reason}."
+        return f"{symbol} queda en vigilancia. Sin compra clara por ahora. Motivo principal: {main_reason}."
 
     @staticmethod
     def _priority(signal_type: SignalType, score: float, risk_level: str) -> AlertPriority:
@@ -192,6 +230,26 @@ class SignalEngine:
     @staticmethod
     def _average(*values: float) -> float:
         return sum(values) / len(values)
+
+    @staticmethod
+    def _manual_recommendation(signal_type: SignalType) -> str:
+        if signal_type == SignalType.BUY:
+            return "compra potencial manual"
+        if signal_type == SignalType.SELL:
+            return "revisar venta o reducir manualmente"
+        if signal_type == SignalType.CRITICAL_NEWS:
+            return "revision urgente manual"
+        return "vigilar; sin accion inmediata"
+
+    @staticmethod
+    def _action_hint(signal_type: SignalType) -> str:
+        if signal_type == SignalType.BUY:
+            return "si encaja con tu tesis, valida niveles, tamano y riesgo antes de lanzar la orden manualmente"
+        if signal_type == SignalType.SELL:
+            return "revisa objetivo, stop y decide manualmente si reducir, proteger beneficios o salir"
+        if signal_type == SignalType.CRITICAL_NEWS:
+            return "revisa la noticia o el deterioro de tesis antes de mantener la posicion sin cambios"
+        return "espera confirmacion adicional antes de actuar"
 
     @staticmethod
     def _clamp(value: float) -> float:

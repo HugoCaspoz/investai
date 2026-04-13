@@ -12,9 +12,9 @@ Este repositorio ya incluye un scaffold funcional del MVP:
 - persistencia local con SQLite por defecto
 - perfil de usuario inferido por semillas
 - registro manual de posiciones
-- ranking demo de discovery
-- motor inicial de senales explicables
-- endpoint interno para Cloud Scheduler (`/api/jobs/scan-demo`)
+- scanner live-first con CoinGecko para cripto
+- motor inicial de senales explicables con recomendaciones de compra y venta/revision
+- endpoint interno para Cloud Scheduler (`/api/jobs/scan`)
 
 El objetivo no es tener un trader automatico, sino un asistente que descubra, vigile y explique.
 
@@ -52,6 +52,8 @@ Variables utiles:
   - Para Neon, si te dan `postgresql://...`, la app ahora lo adapta automaticamente a `postgresql+psycopg://...`
 - `TELEGRAM_BOT_TOKEN`: necesario para enviar mensajes reales a Telegram
 - `TELEGRAM_WEBHOOK_SECRET`: opcional para validar el webhook
+- `COINGECKO_API_KEY`: opcional; si no existe, se usa la API publica de CoinGecko
+- `POLYGON_API_KEY`: activa el scanner live de equities tematicas y la revision de posiciones en acciones
 - `INTERNAL_JOB_TOKEN`: protege el endpoint interno usado por Cloud Scheduler
 
 ## Endpoints principales
@@ -64,7 +66,8 @@ Variables utiles:
 - `GET /api/catalog/demo-candidates`
 - `POST /api/discovery/rank`
 - `POST /api/signals/evaluate`
-- `POST /api/jobs/scan-demo`
+- `POST /api/jobs/scan`
+- `POST /api/jobs/scan-demo` (compatibilidad con el endpoint anterior)
 - `POST /webhooks/telegram`
 
 ## Comandos de Telegram disponibles en el MVP
@@ -74,14 +77,20 @@ Variables utiles:
 - `/buy PLTR 21.5 qty=20 thesis="AI gov software"`
 - `/portfolio`
 - `/scan`
-- `/why MSTR`
+- `/analyze BTC`
 - `/alerts`
 
-Tambien entiende frases como `he comprado PLTR a 21.5`.
+Tambien entiende frases como `he comprado PLTR a 21.5` o `analiza PLTR`.
+
+## Comportamiento actual de recomendaciones
+
+- Discovery: envia oportunidades nuevas como `compra potencial manual` o `vigilar`, con datos live de CoinGecko y de Polygon si configuras `POLYGON_API_KEY`.
+- Cartera: si registras una compra manual, el job puede enviarte `revisar venta o reducir manualmente` o `revision urgente manual` cuando detecta deterioro, objetivo alcanzado o sobreextension.
+- Ejecucion: no ejecuta operaciones; solo analiza y te manda alertas razonadas por Telegram para que decidas tu.
 
 ## Siguiente capa recomendada
 
-1. Sustituir el scanner demo por datos reales de Polygon, CoinGecko y SEC.
+1. Ampliar el scanner real a equities con Polygon y eventos SEC.
 2. Anadir workers de ingestion y feature store.
 3. Conectar el mismo motor al backtester event-driven.
 4. Incorporar panel historico y shadow mode.

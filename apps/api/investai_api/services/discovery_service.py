@@ -27,11 +27,15 @@ class DiscoveryService:
                     symbol=candidate.symbol,
                     name=candidate.name,
                     asset_type=candidate.asset_type,
+                    source=candidate.source,
                     bucket=bucket_for_themes(candidate.themes),
                     score=round(score, 3),
                     profile_fit=round(profile_fit, 3),
                     risk_level=self._risk_level(candidate.volatility_score, candidate.liquidity_score),
                     reasons=self._reasons(candidate, profile_fit, volatility_fit),
+                    current_price=candidate.current_price,
+                    price_change_percentage_24h=candidate.price_change_percentage_24h,
+                    price_change_percentage_7d=candidate.price_change_percentage_7d,
                 )
             )
         return sorted(results, key=lambda item: item.score, reverse=True)
@@ -56,12 +60,18 @@ class DiscoveryService:
         reasons: list[str] = []
         if profile_fit >= 0.60:
             reasons.append("encaja bien con los temas dominantes de tu perfil")
+        if candidate.price_change_percentage_24h is not None and candidate.price_change_percentage_24h >= 4:
+            reasons.append(f"momentum reciente positivo: {candidate.price_change_percentage_24h:.1f}% en 24h")
+        if candidate.price_change_percentage_7d is not None and candidate.price_change_percentage_7d >= 8:
+            reasons.append(f"continuidad en 7d: {candidate.price_change_percentage_7d:.1f}%")
         if candidate.catalyst_strength >= 0.65:
             reasons.append("presenta catalizador reciente o narrativa activa")
         if candidate.narrative_strength >= 0.70:
             reasons.append("mantiene narrativa fuerte dentro de su bucket")
         if candidate.liquidity_score >= 0.75:
             reasons.append("liquidez suficiente para un scanner agresivo pero serio")
+        if candidate.dollar_volume is not None and candidate.dollar_volume >= 100_000_000:
+            reasons.append("volumen negociado suficientemente alto")
         if volatility_fit >= 0.70:
             reasons.append("la volatilidad esta alineada con un perfil growth/agresivo")
         return reasons or ["sin razones claras todavia; merece observacion, no accion inmediata"]

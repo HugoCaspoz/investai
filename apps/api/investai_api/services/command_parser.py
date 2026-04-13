@@ -21,6 +21,10 @@ class CommandParser:
         r"anade\s+(?P<symbol>[a-zA-Z0-9._-]+)\s+a\s+cartera\s+a\s+(?P<price>\d+(?:\.\d+)?)",
         re.IGNORECASE,
     )
+    analyze_pattern = re.compile(
+        r"(?:analiza|revisa)\s+(?P<symbol>[a-zA-Z0-9._-]+)",
+        re.IGNORECASE,
+    )
 
     def parse(self, text: str) -> ParsedCommand:
         normalized = text.strip()
@@ -48,8 +52,8 @@ class CommandParser:
         if command == "/seed":
             seeds = [token.replace(",", "").upper() for token in parts[1:]]
             return ParsedCommand(action="seed", payload={"seeds": [seed for seed in seeds if seed]})
-        if command == "/why" and len(parts) >= 2:
-            return ParsedCommand(action="why", payload={"symbol": parts[1].upper()})
+        if command in {"/why", "/analyze", "/analiza", "/review"} and len(parts) >= 2:
+            return ParsedCommand(action="analyze_symbol", payload={"symbol": parts[1].upper()})
         if command == "/buy" and len(parts) >= 3:
             return ParsedCommand(action="register_position", payload=self._parse_position_tokens(parts[1:]))
         return ParsedCommand(action="unknown")
@@ -65,6 +69,9 @@ class CommandParser:
                         "entry_price": float(match.group("price")),
                     },
                 )
+        match = self.analyze_pattern.search(text)
+        if match:
+            return ParsedCommand(action="analyze_symbol", payload={"symbol": match.group("symbol").upper()})
         return ParsedCommand(action="unknown")
 
     @staticmethod

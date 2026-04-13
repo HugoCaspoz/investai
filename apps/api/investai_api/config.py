@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str = ""
     telegram_default_chat_id: str = ""
     openai_api_key: str = ""
+    polygon_api_key: str = ""
+    coingecko_api_key: str = ""
     max_alerts_per_day: int = 3
     internal_job_token: str = ""
     upstash_redis_rest_url: str = ""

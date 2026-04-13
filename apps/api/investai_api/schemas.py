@@ -77,11 +77,16 @@ class CandidateInput(BaseModel):
     name: str
     asset_type: AssetType
     themes: list[str]
+    source: str = "demo"
     narrative_strength: float = 0.5
     catalyst_strength: float = 0.5
     liquidity_score: float = 0.5
     volatility_score: float = 0.5
+    current_price: float | None = None
+    price_change_percentage_24h: float | None = None
+    price_change_percentage_7d: float | None = None
     market_cap: float | None = None
+    market_cap_rank: int | None = None
     dollar_volume: float | None = None
 
 
@@ -95,11 +100,15 @@ class RankedCandidateResponse(BaseModel):
     symbol: str
     name: str
     asset_type: AssetType
+    source: str
     bucket: str
     score: float
     profile_fit: float
     risk_level: str
     reasons: list[str]
+    current_price: float | None = None
+    price_change_percentage_24h: float | None = None
+    price_change_percentage_7d: float | None = None
 
 
 class SignalEvaluationRequest(BaseModel):
@@ -107,9 +116,15 @@ class SignalEvaluationRequest(BaseModel):
     profile_id: int | None = None
     symbol: str
     asset_type: AssetType
+    source: str = "unknown"
     bucket: str | None = None
     themes: list[str] = Field(default_factory=list)
+    name: str | None = None
     price: float | None = None
+    price_change_percentage_24h: float | None = None
+    price_change_percentage_7d: float | None = None
+    market_cap: float | None = None
+    dollar_volume: float | None = None
     technical_setup: float | None = None
     relative_strength: float = 0.5
     pullback_quality: float = 0.5
@@ -133,6 +148,7 @@ class SignalRead(BaseModel):
     id: int | None = None
     symbol: str
     asset_type: AssetType
+    source: str = "unknown"
     signal_type: SignalType
     alert_priority: AlertPriority
     bucket: str
@@ -140,6 +156,9 @@ class SignalRead(BaseModel):
     confidence: float
     risk_level: str
     summary: str
+    manual_recommendation: str
+    execution_mode: str
+    action_hint: str
     reasons_for: list[str]
     reasons_against: list[str]
     subscores: dict[str, float]
