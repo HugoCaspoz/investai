@@ -42,7 +42,12 @@ settings = get_settings()
 
 @router.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "service": "investai-api"}
+    return {
+        "status": "ok",
+        "service": "investai-api",
+        "message_template_version": "telegram-v3",
+        "analytics_mode": "paper-trades-enabled",
+    }
 
 
 @router.post("/profile/bootstrap", response_model=ProfileRead)
