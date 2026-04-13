@@ -31,6 +31,17 @@ class MarketDataService:
             pass
         return candidates
 
+    async def diagnose_live_sources(self, profile: UserProfile) -> dict[str, object]:
+        coingecko_status = await self._diagnose_coingecko(profile)
+        polygon_status = await self._diagnose_polygon(profile)
+        total_candidates = int(coingecko_status["candidates"]) + int(polygon_status["candidates"])
+        return {
+            "ok": total_candidates > 0,
+            "total_candidates": total_candidates,
+            "coingecko": coingecko_status,
+            "polygon": polygon_status,
+        }
+
     async def fetch_live_candidate_for_symbol(
         self,
         profile: UserProfile,
@@ -95,6 +106,43 @@ class MarketDataService:
         thematic_universe = self._equity_universe_for_profile(profile)
         symbols = [item["symbol"] for item in thematic_universe]
         return await self._fetch_polygon_snapshots(symbols, profile)
+
+    async def _diagnose_coingecko(self, profile: UserProfile) -> dict[str, object]:
+        plan = (self.settings.coingecko_api_plan or "demo").strip().lower()
+        try:
+            candidates = await self._fetch_coingecko_candidates(profile)
+            return {
+                "configured": bool(self.settings.coingecko_api_key),
+                "plan": plan,
+                "ok": len(candidates) > 0,
+                "candidates": len(candidates),
+                "error": None,
+            }
+        except Exception as exc:
+            return {
+                "configured": bool(self.settings.coingecko_api_key),
+                "plan": plan,
+                "ok": False,
+                "candidates": 0,
+                "error": str(exc),
+            }
+
+    async def _diagnose_polygon(self, profile: UserProfile) -> dict[str, object]:
+        try:
+            candidates = await self._fetch_polygon_candidates(profile)
+            return {
+                "configured": bool(self.settings.polygon_api_key),
+                "ok": len(candidates) > 0,
+                "candidates": len(candidates),
+                "error": None,
+            }
+        except Exception as exc:
+            return {
+                "configured": bool(self.settings.polygon_api_key),
+                "ok": False,
+                "candidates": 0,
+                "error": str(exc),
+            }
 
     async def _fetch_polygon_snapshots(
         self,
@@ -372,10 +420,17 @@ class MarketDataService:
         return candidates
 
     def _coingecko_client_config(self) -> tuple[str, dict[str, str]]:
-        base_url = self.COINGECKO_PRO_BASE_URL if self.settings.coingecko_api_key else self.COINGECKO_PUBLIC_BASE_URL
+        plan = (self.settings.coingecko_api_plan or "demo").strip().lower()
         headers = {"accept": "application/json"}
+        if plan == "pro":
+            base_url = self.COINGECKO_PRO_BASE_URL
+            if self.settings.coingecko_api_key:
+                headers["x-cg-pro-api-key"] = self.settings.coingecko_api_key
+            return base_url, headers
+
+        base_url = self.COINGECKO_PUBLIC_BASE_URL
         if self.settings.coingecko_api_key:
-            headers["x-cg-pro-api-key"] = self.settings.coingecko_api_key
+            headers["x-cg-demo-api-key"] = self.settings.coingecko_api_key
         return base_url, headers
 
     def _equity_universe_for_profile(self, profile: UserProfile) -> list[dict[str, object]]:

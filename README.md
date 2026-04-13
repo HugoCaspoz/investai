@@ -53,6 +53,7 @@ Variables utiles:
 - `TELEGRAM_BOT_TOKEN`: necesario para enviar mensajes reales a Telegram
 - `TELEGRAM_WEBHOOK_SECRET`: opcional para validar el webhook
 - `COINGECKO_API_KEY`: opcional; si no existe, se usa la API publica de CoinGecko
+- `COINGECKO_API_PLAN`: `demo` por defecto; usa `pro` si tu clave es del plan Pro de CoinGecko
 - `POLYGON_API_KEY`: activa el scanner live de equities tematicas y la revision de posiciones en acciones
 - `INTERNAL_JOB_TOKEN`: protege el endpoint interno usado por Cloud Scheduler
 
@@ -66,6 +67,7 @@ Variables utiles:
 - `GET /api/catalog/demo-candidates`
 - `POST /api/discovery/rank`
 - `POST /api/signals/evaluate`
+- `GET /api/diagnostics/live`
 - `POST /api/jobs/scan`
 - `POST /api/jobs/scan-demo` (compatibilidad con el endpoint anterior)
 - `POST /webhooks/telegram`

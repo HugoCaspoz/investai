@@ -19,6 +19,7 @@ from apps.api.investai_api.schemas import (
 )
 from apps.api.investai_api.services.discovery_service import DiscoveryService
 from apps.api.investai_api.services.job_service import JobService
+from apps.api.investai_api.services.market_data_service import MarketDataService
 from apps.api.investai_api.services.portfolio_service import PortfolioService
 from apps.api.investai_api.services.profile_service import ProfileService
 from apps.api.investai_api.services.signal_engine import SignalEngine
@@ -30,6 +31,7 @@ portfolio_service = PortfolioService()
 discovery_service = DiscoveryService()
 signal_engine = SignalEngine()
 job_service = JobService()
+market_data_service = MarketDataService()
 settings = get_settings()
 
 
@@ -101,6 +103,24 @@ def evaluate_signal(payload: SignalEvaluationRequest, session: Session = Depends
         telegram_chat_id=payload.telegram_chat_id,
     )
     return signal_engine.evaluate(session, profile, payload)
+
+
+@router.get("/diagnostics/live")
+async def live_diagnostics(
+    telegram_chat_id: str | None = None,
+    profile_id: int | None = None,
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    profile = profile_service.resolve_profile(session, profile_id=profile_id, telegram_chat_id=telegram_chat_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    diagnostics = await market_data_service.diagnose_live_sources(profile)
+    return {
+        "status": "ok",
+        "profile_id": profile.id,
+        "telegram_chat_id": profile.telegram_chat_id,
+        **diagnostics,
+    }
 
 
 async def _run_scan_job(
