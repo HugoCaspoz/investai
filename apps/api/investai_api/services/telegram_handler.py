@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from apps.api.investai_api.models import AssetType, Position
+from apps.api.investai_api.models import AssetType
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from apps.api.investai_api.models import SignalSnapshot, UserProfile
-from apps.api.investai_api.schemas import PositionCreate, ProfileBootstrapRequest
+from apps.api.investai_api.schemas import PositionCloseRequest, PositionCreate, ProfileBootstrapRequest
+from apps.api.investai_api.services.analytics_service import AnalyticsService
 from apps.api.investai_api.services.command_parser import CommandParser
 from apps.api.investai_api.services.discovery_service import DiscoveryService
 from apps.api.investai_api.services.market_data_service import MarketDataService
+from apps.api.investai_api.services.message_formatter import MessageFormatter
 from apps.api.investai_api.services.portfolio_service import PortfolioService
 from apps.api.investai_api.services.profile_service import ProfileService
 from apps.api.investai_api.services.signal_engine import SignalEngine
@@ -17,6 +19,7 @@ from apps.api.investai_api.services.telegram_service import TelegramService
 
 class TelegramHandler:
     def __init__(self) -> None:
+        self.analytics_service = AnalyticsService()
         self.parser = CommandParser()
         self.profile_service = ProfileService()
         self.portfolio_service = PortfolioService()
@@ -74,6 +77,21 @@ class TelegramHandler:
                 ),
             )
             reply = f"Posicion registrada: {position.symbol} a {position.entry_price:g}."
+        elif parsed.action == "close_position":
+            try:
+                close_event = self.portfolio_service.close_position(
+                    session,
+                    profile,
+                    PositionCloseRequest(
+                        telegram_chat_id=chat_id,
+                        symbol=parsed.payload["symbol"],
+                        exit_price=parsed.payload["exit_price"],
+                        note=parsed.payload.get("note"),
+                    ),
+                )
+                reply = f"Posicion cerrada: {close_event.symbol} a {close_event.exit_price:g} | resultado {close_event.return_pct:+.2f}%."
+            except ValueError as exc:
+                reply = str(exc)
         elif parsed.action == "portfolio":
             reply = self.portfolio_service.render_positions(self.portfolio_service.list_open_positions(session, profile.id))
         elif parsed.action == "scan":
@@ -83,29 +101,28 @@ class TelegramHandler:
             else:
                 ranked = self.discovery_service.rank_candidates(profile, live_candidates)
                 candidate_map = {candidate.symbol: candidate for candidate in live_candidates}
-                lines = ["Top candidatos del scanner live con recomendacion manual:"]
+                lines = ["🔎 Radar ahora mismo:"]
                 for item in ranked[:5]:
                     candidate = candidate_map[item.symbol]
                     signal = self.signal_engine.preview(
                         profile,
                         self.market_data_service.build_signal_request(candidate, profile.telegram_chat_id),
                     )
-                    price_text = f" | precio=${item.current_price:,.4f}" if item.current_price is not None else ""
-                    day_text = (
-                        f" | 24h={item.price_change_percentage_24h:+.2f}%"
-                        if item.price_change_percentage_24h is not None
-                        else ""
-                    )
-                    lines.append(
-                        f"- {item.symbol} | {signal.manual_recommendation} | {item.bucket} | fuente={item.source} | score={signal.score:.2f} | riesgo={signal.risk_level}{price_text}{day_text}"
-                    )
+                    if signal.subscores.get("profile_fit", 0.0) < 0.40:
+                        continue
+                    lines.append(MessageFormatter.format_scan_item(signal, candidate))
+                if len(lines) == 1:
+                    lines.append("🟡 Hoy no veo nada con encaje suficiente para mandarte como idea seria.")
                 reply = "\n".join(lines)
         elif parsed.action == "alerts":
             reply = self._format_latest_alerts(session, profile.id)
+        elif parsed.action == "stats":
+            analytics = self.analytics_service.build_signal_analytics(session, profile.id)
+            reply = self.analytics_service.render_stats_summary(analytics)
         elif parsed.action == "analyze_symbol":
             reply = await self._explain_symbol(session, profile, parsed.payload["symbol"])
         else:
-            reply = "No he entendido el mensaje. Usa /help, /scan, /analyze PLTR, /profile, /portfolio, o escribe 'he comprado PLTR a 21.5'."
+            reply = "No he entendido el mensaje. Usa /help, /scan, /analyze PLTR, /stats, /profile, /portfolio, o escribe 'he comprado PLTR a 21.5'."
 
         delivered = await self.telegram_service.send_message(chat_id, reply)
         return {"handled": True, "reply_text": reply, "delivered": delivered}
@@ -123,13 +140,13 @@ class TelegramHandler:
                 self.market_data_service.build_position_review_request(position, candidate, profile.telegram_chat_id),
             )
             pnl_pct = self.market_data_service.extract_pnl_pct(position, candidate)
-            return self._render_live_analysis(signal, candidate.symbol, candidate.source, candidate.current_price, pnl_pct, position)
+            return MessageFormatter.format_symbol_analysis(signal, candidate, pnl_pct, position)
 
         signal = self.signal_engine.preview(
             profile,
             self.market_data_service.build_signal_request(candidate, profile.telegram_chat_id),
         )
-        return self._render_live_analysis(signal, candidate.symbol, candidate.source, candidate.current_price, None, None)
+        return MessageFormatter.format_symbol_analysis(signal, candidate)
 
     def _format_latest_alerts(self, session: Session, profile_id: int) -> str:
         alerts = list(
@@ -142,35 +159,11 @@ class TelegramHandler:
         )
         if not alerts:
             return "Todavia no hay alertas generadas. Usa /scan o /analyze SYMBOL para crear contexto."
-        lines = ["Ultimas alertas:"]
+        lines = ["🧾 Ultimas alertas:"]
         for alert in alerts:
             rationale = alert.rationale or {}
             manual_recommendation = rationale.get("manual_recommendation", alert.signal_type)
-            lines.append(f"- {alert.symbol} | {manual_recommendation} | score={alert.score:.2f} | {alert.summary}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _render_live_analysis(signal, symbol: str, source: str, current_price: float | None, pnl_pct: float | None, position: Position | None) -> str:
-        lines = [
-            f"{symbol} | recomendacion manual: {signal.manual_recommendation}",
-            f"Modo: {signal.execution_mode}",
-            f"Fuente: {source}",
-            f"Bucket: {signal.bucket}",
-            f"Riesgo: {signal.risk_level}",
-            f"Score: {signal.score:.2f} | Confianza: {signal.confidence:.2f}",
-        ]
-        if current_price is not None:
-            lines.append(f"Precio actual: ${current_price:,.4f}")
-        if position:
-            lines.append(f"Entrada registrada: ${position.entry_price:,.4f}")
-            if pnl_pct is not None:
-                lines.append(f"Rendimiento desde entrada: {pnl_pct:+.2f}%")
-        lines.append("")
-        lines.append(f"Resumen: {signal.summary}")
-        lines.append(f"A favor: {', '.join(signal.reasons_for[:4])}.")
-        if signal.reasons_against:
-            lines.append(f"En contra: {', '.join(signal.reasons_against[:3])}.")
-        lines.append(f"Siguiente paso sugerido: {signal.action_hint}.")
+            lines.append(MessageFormatter.format_alert_list_item(alert.symbol, str(manual_recommendation), alert.score, alert.summary))
         return "\n".join(lines)
 
     @staticmethod
@@ -180,9 +173,11 @@ class TelegramHandler:
             "/profile - ver perfil inferido\n"
             "/seed BTC ETH PLTR OKLO - actualizar semillas\n"
             "/buy PLTR 21.5 qty=20 thesis=\"AI gov software\" - registrar compra\n"
+            "/close PLTR 30 note=\"salida manual\" - cerrar una posicion manualmente\n"
             "/portfolio - ver posiciones abiertas\n"
             "/scan - ranking live de oportunidades\n"
             "/analyze BTC - analizar un simbolo con recomendacion manual\n"
+            "/stats - ver si las alertas estan funcionando con el tiempo\n"
             "/alerts - ver ultimas alertas\n"
-            "Tambien puedes escribir: he comprado PLTR a 21.5 o analiza PLTR"
+            "Tambien puedes escribir: he comprado PLTR a 21.5, he vendido PLTR a 30 o analiza PLTR"
         )

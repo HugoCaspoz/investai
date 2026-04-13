@@ -17,6 +17,10 @@ class CommandParser:
         r"he comprado\s+(?P<symbol>[a-zA-Z0-9._-]+)\s+a\s+(?P<price>\d+(?:\.\d+)?)",
         re.IGNORECASE,
     )
+    sell_pattern = re.compile(
+        r"he vendido\s+(?P<symbol>[a-zA-Z0-9._-]+)\s+a\s+(?P<price>\d+(?:\.\d+)?)",
+        re.IGNORECASE,
+    )
     add_position_pattern = re.compile(
         r"anade\s+(?P<symbol>[a-zA-Z0-9._-]+)\s+a\s+cartera\s+a\s+(?P<price>\d+(?:\.\d+)?)",
         re.IGNORECASE,
@@ -47,6 +51,8 @@ class CommandParser:
             return ParsedCommand(action="portfolio")
         if command == "/alerts":
             return ParsedCommand(action="alerts")
+        if command in {"/stats", "/performance"}:
+            return ParsedCommand(action="stats")
         if command == "/scan":
             return ParsedCommand(action="scan")
         if command == "/seed":
@@ -56,6 +62,8 @@ class CommandParser:
             return ParsedCommand(action="analyze_symbol", payload={"symbol": parts[1].upper()})
         if command == "/buy" and len(parts) >= 3:
             return ParsedCommand(action="register_position", payload=self._parse_position_tokens(parts[1:]))
+        if command in {"/close", "/sell"} and len(parts) >= 3:
+            return ParsedCommand(action="close_position", payload=self._parse_close_tokens(parts[1:]))
         return ParsedCommand(action="unknown")
 
     def _parse_natural_language(self, text: str) -> ParsedCommand:
@@ -69,6 +77,15 @@ class CommandParser:
                         "entry_price": float(match.group("price")),
                     },
                 )
+        sell_match = self.sell_pattern.search(text)
+        if sell_match:
+            return ParsedCommand(
+                action="close_position",
+                payload={
+                    "symbol": sell_match.group("symbol").upper(),
+                    "exit_price": float(sell_match.group("price")),
+                },
+            )
         match = self.analyze_pattern.search(text)
         if match:
             return ParsedCommand(action="analyze_symbol", payload={"symbol": match.group("symbol").upper()})
@@ -91,4 +108,17 @@ class CommandParser:
                 payload["target_price"] = float(value)
             elif key == "stop":
                 payload["stop_price"] = float(value)
+        return payload
+
+    @staticmethod
+    def _parse_close_tokens(tokens: list[str]) -> dict[str, Any]:
+        symbol = tokens[0].upper()
+        exit_price = float(tokens[1])
+        payload: dict[str, Any] = {"symbol": symbol, "exit_price": exit_price}
+        for token in tokens[2:]:
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            if key == "note":
+                payload["note"] = value
         return payload

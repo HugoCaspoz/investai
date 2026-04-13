@@ -148,18 +148,20 @@ class SignalEngine:
     ) -> tuple[list[str], list[str]]:
         buy_reasons: list[str] = []
         sell_reasons: list[str] = []
-        if technical_setup >= 0.65:
-            buy_reasons.append("estructura tecnica favorable o correccion controlada")
+        if payload.price_change_percentage_24h is not None and -3.5 <= payload.price_change_percentage_24h <= 1.5:
+            buy_reasons.append("pullback suave sin perder el tono")
+        elif technical_setup >= 0.65:
+            buy_reasons.append("estructura tecnica razonable para vigilar entrada")
         if payload.relative_strength >= 0.65:
             buy_reasons.append("relative strength por encima de la media del bucket")
         if payload.catalyst_score >= 0.65:
             buy_reasons.append("catalizador reciente con impacto potencial relevante")
         if payload.narrative_strength >= 0.65:
             buy_reasons.append("narrativa sectorial todavia fuerte")
-        if payload.price_change_percentage_24h is not None and payload.price_change_percentage_24h >= 4:
-            buy_reasons.append(f"subida reciente de {payload.price_change_percentage_24h:.1f}% en 24h")
-        if payload.price_change_percentage_7d is not None and payload.price_change_percentage_7d >= 8:
-            buy_reasons.append(f"continuidad de momentum: {payload.price_change_percentage_7d:.1f}% en 7d")
+        if payload.price_change_percentage_24h is not None and 2 <= payload.price_change_percentage_24h <= 8:
+            buy_reasons.append(f"impulso reciente todavia ordenado: {payload.price_change_percentage_24h:.1f}% en 24h")
+        if payload.price_change_percentage_7d is not None and 5 <= payload.price_change_percentage_7d <= 20:
+            buy_reasons.append(f"continuidad de momentum razonable: {payload.price_change_percentage_7d:.1f}% en 7d")
         if payload.dollar_volume is not None and payload.dollar_volume >= 100_000_000:
             buy_reasons.append("volumen negociado alto para una alerta seria")
         if profile_fit >= 0.55:
@@ -168,8 +170,14 @@ class SignalEngine:
             sell_reasons.append("liquidez justa para una entrada disciplinada")
         if payload.volatility_score >= 0.80:
             sell_reasons.append("volatilidad alta; conviene tamano prudente")
+        if payload.price_change_percentage_24h is not None and payload.price_change_percentage_24h >= 15:
+            sell_reasons.append(f"movimiento demasiado vertical: {payload.price_change_percentage_24h:.1f}% en 24h")
+        if payload.price_change_percentage_7d is not None and payload.price_change_percentage_7d >= 35:
+            sell_reasons.append(f"sobreextension fuerte: {payload.price_change_percentage_7d:.1f}% en 7d")
         if payload.price_change_percentage_24h is not None and payload.price_change_percentage_24h <= -5:
             sell_reasons.append(f"caida agresiva de {payload.price_change_percentage_24h:.1f}% en 24h")
+        if payload.price_change_percentage_7d is not None and payload.price_change_percentage_7d <= -12:
+            sell_reasons.append(f"debilidad semanal todavia importante: {payload.price_change_percentage_7d:.1f}% en 7d")
         if payload.event_risk >= 0.70:
             sell_reasons.append("riesgo de evento cercano que puede distorsionar la lectura")
         if payload.technical_deterioration >= 0.60:
@@ -177,7 +185,7 @@ class SignalEngine:
         if payload.thesis_break_risk >= 0.60:
             sell_reasons.append("la tesis podria estar perdiendo calidad")
         if payload.target_or_extension_score >= 0.60:
-            sell_reasons.append("objetivo cumplido o sobreextension suficiente para revisar")
+            sell_reasons.append("sobreextension suficiente para no perseguir la entrada")
         return buy_reasons, sell_reasons
 
     def _summary(

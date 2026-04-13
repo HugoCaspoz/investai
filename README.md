@@ -65,11 +65,13 @@ Variables utiles:
 - `POST /api/profile/bootstrap`
 - `GET /api/profile/by-chat/{telegram_chat_id}`
 - `POST /api/positions`
+- `POST /api/positions/close`
 - `GET /api/positions`
 - `GET /api/catalog/demo-candidates`
 - `POST /api/discovery/rank`
 - `POST /api/signals/evaluate`
 - `GET /api/diagnostics/live`
+- `GET /api/analytics/signals`
 - `POST /api/jobs/scan`
 - `POST /api/jobs/scan-demo` (compatibilidad con el endpoint anterior)
 - `POST /webhooks/telegram`
@@ -79,17 +81,22 @@ Variables utiles:
 - `/profile`
 - `/seed BTC ETH PLTR OKLO`
 - `/buy PLTR 21.5 qty=20 thesis="AI gov software"`
+- `/close PLTR 30 note="salida manual"`
 - `/portfolio`
 - `/scan`
 - `/analyze BTC`
+- `/stats`
 - `/alerts`
 
-Tambien entiende frases como `he comprado PLTR a 21.5` o `analiza PLTR`.
+Tambien entiende frases como `he comprado PLTR a 21.5`, `he vendido PLTR a 30` o `analiza PLTR`.
 
 ## Comportamiento actual de recomendaciones
 
 - Discovery: envia oportunidades nuevas como `compra potencial manual` o `vigilar`, con datos live de CoinGecko para cripto y Twelve Data o Polygon para acciones.
 - Cartera: si registras una compra manual, el job puede enviarte `revisar venta o reducir manualmente` o `revision urgente manual` cuando detecta deterioro, objetivo alcanzado o sobreextension.
+- Historico real: cada alerta de compra enviada se mide de dos formas:
+  una a horizonte fijo para tener una lectura live-forward comparable,
+  y otra como `paper trade` del bot, que se cierra cuando el sistema detecta una salida razonable.
 - Ejecucion: no ejecuta operaciones; solo analiza y te manda alertas razonadas por Telegram para que decidas tu.
 
 ## Nota sobre acciones en plan gratuito

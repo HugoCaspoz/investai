@@ -5,9 +5,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from apps.api.investai_api.models import AssetType, Position, SignalSnapshot, SignalType, UserProfile
+from apps.api.investai_api.models import AlertDelivery, AssetType, Position, SignalSnapshot, SignalType, UserProfile
+from apps.api.investai_api.services.analytics_service import AnalyticsService
 from apps.api.investai_api.services.discovery_service import DiscoveryService
 from apps.api.investai_api.services.market_data_service import MarketDataService
+from apps.api.investai_api.services.message_formatter import MessageFormatter
 from apps.api.investai_api.services.portfolio_service import PortfolioService
 from apps.api.investai_api.services.signal_engine import SignalEngine
 from apps.api.investai_api.services.telegram_service import TelegramService
@@ -17,6 +19,7 @@ class JobService:
     ALERT_COOLDOWN_HOURS = 6
 
     def __init__(self) -> None:
+        self.analytics_service = AnalyticsService()
         self.discovery_service = DiscoveryService()
         self.market_data_service = MarketDataService()
         self.portfolio_service = PortfolioService()
@@ -29,12 +32,20 @@ class JobService:
         sell_alerts_sent = 0
         alerts_sent = 0
         profiles_with_live_data = 0
+        outcomes_resolved = await self.analytics_service.resolve_due_outcomes(session)
         for profile in profiles:
+            alerts_sent_today = self._alerts_sent_last_24h(session, profile.id)
+            remaining_daily_alerts = max(0, profile.max_alerts_per_day - alerts_sent_today)
             profile_alerts_sent = 0
+            if remaining_daily_alerts == 0:
+                continue
             positions = self.portfolio_service.list_open_positions(session, profile.id)
+            open_symbols = {position.symbol for position in positions}
+            paper_trades = self.analytics_service.list_open_paper_trades(session, profile.id)
+            open_symbols.update({trade.symbol for trade in paper_trades})
 
             for position in positions:
-                if profile_alerts_sent >= profile.max_alerts_per_day:
+                if profile_alerts_sent >= remaining_daily_alerts:
                     break
                 delivered = await self._maybe_send_position_review(session, profile, position)
                 if delivered:
@@ -42,7 +53,16 @@ class JobService:
                     sell_alerts_sent += 1
                     profile_alerts_sent += 1
 
-            if profile_alerts_sent >= profile.max_alerts_per_day:
+            for trade in paper_trades:
+                if profile_alerts_sent >= remaining_daily_alerts:
+                    break
+                delivered = await self._maybe_send_paper_trade_exit(session, profile, trade)
+                if delivered:
+                    alerts_sent += 1
+                    sell_alerts_sent += 1
+                    profile_alerts_sent += 1
+
+            if profile_alerts_sent >= remaining_daily_alerts:
                 continue
 
             live_candidates = await self.market_data_service.fetch_live_candidates(profile)
@@ -52,8 +72,10 @@ class JobService:
             candidate_map = {candidate.symbol: candidate for candidate in live_candidates}
             ranked = self.discovery_service.rank_candidates(profile, live_candidates)
             for candidate in ranked:
-                if profile_alerts_sent >= profile.max_alerts_per_day:
+                if profile_alerts_sent >= remaining_daily_alerts:
                     break
+                if candidate.symbol in open_symbols:
+                    continue
                 source_candidate = candidate_map[candidate.symbol]
                 signal = self.signal_engine.evaluate(
                     session,
@@ -62,14 +84,38 @@ class JobService:
                 )
                 if signal.signal_type != SignalType.BUY:
                     continue
+                if signal.subscores.get("profile_fit", 0.0) < 0.40:
+                    continue
                 if not self._should_send_alert(session, profile.id, source_candidate.symbol, signal.signal_type):
                     continue
                 if profile.telegram_chat_id:
                     delivered = await self.telegram_service.send_message(
                         profile.telegram_chat_id,
-                        self._format_buy_alert_message(signal, source_candidate),
+                        MessageFormatter.format_buy_alert(signal, source_candidate),
                     )
                     if delivered:
+                        self._record_delivery(session, signal.id, profile.telegram_chat_id)
+                        self.analytics_service.register_buy_signal_outcome(
+                            session,
+                            profile,
+                            signal.id,
+                            signal.signal_type,
+                            signal.symbol,
+                            signal.asset_type,
+                            signal.source,
+                            signal.bucket,
+                            source_candidate.current_price,
+                        )
+                        self.analytics_service.open_paper_trade(
+                            session,
+                            profile,
+                            signal.id,
+                            signal.symbol,
+                            signal.asset_type,
+                            signal.source,
+                            signal.bucket,
+                            source_candidate.current_price,
+                        )
                         alerts_sent += 1
                         buy_alerts_sent += 1
                         profile_alerts_sent += 1
@@ -79,6 +125,7 @@ class JobService:
             "buy_alerts_sent": buy_alerts_sent,
             "sell_alerts_sent": sell_alerts_sent,
             "alerts_sent": alerts_sent,
+            "outcomes_resolved": outcomes_resolved,
         }
 
     async def _maybe_send_position_review(self, session: Session, profile: UserProfile, position: Position) -> bool:
@@ -106,8 +153,59 @@ class JobService:
             return False
         delivered = await self.telegram_service.send_message(
             profile.telegram_chat_id,
-            self._format_position_review_message(signal, candidate, position, self.market_data_service.extract_pnl_pct(position, candidate)),
+            MessageFormatter.format_position_review(
+                signal,
+                candidate,
+                position,
+                self.market_data_service.extract_pnl_pct(position, candidate),
+            ),
         )
+        if delivered:
+            self._record_delivery(session, signal.id, profile.telegram_chat_id)
+        return delivered
+
+    async def _maybe_send_paper_trade_exit(self, session: Session, profile: UserProfile, trade) -> bool:
+        candidate = await self.market_data_service.fetch_live_candidate_for_symbol(
+            profile,
+            trade.symbol,
+            AssetType(trade.asset_type),
+        )
+        if not candidate:
+            return False
+        paper_position = Position(
+            profile_id=profile.id,
+            symbol=trade.symbol,
+            asset_type=trade.asset_type,
+            entry_price=trade.entry_price,
+            quantity=None,
+            thesis="paper_trade",
+            target_price=None,
+            stop_price=None,
+            theme=trade.bucket,
+        )
+        signal = self.signal_engine.evaluate(
+            session,
+            profile,
+            self.market_data_service.build_position_review_request(
+                paper_position,
+                candidate,
+                profile.telegram_chat_id,
+            ),
+        )
+        if signal.signal_type not in {SignalType.SELL, SignalType.CRITICAL_NEWS}:
+            return False
+        if not self._should_send_alert(session, profile.id, trade.symbol, signal.signal_type):
+            return False
+        if not profile.telegram_chat_id:
+            return False
+        pnl_pct = self.market_data_service.extract_pnl_pct(paper_position, candidate)
+        delivered = await self.telegram_service.send_message(
+            profile.telegram_chat_id,
+            MessageFormatter.format_position_review(signal, candidate, paper_position, pnl_pct),
+        )
+        if delivered:
+            self._record_delivery(session, signal.id, profile.telegram_chat_id)
+            self.analytics_service.close_paper_trade(session, trade, signal.id, candidate.current_price)
         return delivered
 
     def _should_send_alert(
@@ -151,63 +249,28 @@ class JobService:
         return comparison_created_at < cutoff
 
     @staticmethod
-    def _format_buy_alert_message(signal, candidate) -> str:
-        lines = [
-            f"[{signal.alert_priority.value.upper()}] {candidate.symbol}",
-            f"Recomendacion manual: {signal.manual_recommendation}",
-            f"Modo: {signal.execution_mode}",
-            f"Fuente: {candidate.source}",
-            f"Tipo: {signal.signal_type.value}",
-            f"Bucket: {signal.bucket}",
-            f"Riesgo: {signal.risk_level}",
-            f"Score: {signal.score:.2f} | Confianza: {signal.confidence:.2f}",
-        ]
-        if candidate.current_price is not None:
-            lines.append(f"Precio: ${candidate.current_price:,.4f}")
-        if candidate.price_change_percentage_24h is not None or candidate.price_change_percentage_7d is not None:
-            change_24h = (
-                f"{candidate.price_change_percentage_24h:+.2f}%"
-                if candidate.price_change_percentage_24h is not None
-                else "n/d"
-            )
-            change_7d = (
-                f"{candidate.price_change_percentage_7d:+.2f}%"
-                if candidate.price_change_percentage_7d is not None
-                else "n/d"
-            )
-            lines.append(f"Momentum: 24h {change_24h} | 7d {change_7d}")
-        lines.append("")
-        lines.append(f"Resumen: {signal.summary}")
-        lines.append(f"A favor: {', '.join(signal.reasons_for[:3])}.")
-        if signal.reasons_against:
-            lines.append(f"En contra: {', '.join(signal.reasons_against[:2])}.")
-        lines.append(f"Siguiente paso sugerido: {signal.action_hint}.")
-        return "\n".join(lines)
+    def _record_delivery(session: Session, signal_snapshot_id: int | None, chat_id: str | None) -> None:
+        if signal_snapshot_id is None:
+            return
+        delivery = AlertDelivery(
+            signal_snapshot_id=signal_snapshot_id,
+            channel="telegram",
+            chat_id=chat_id,
+            status="delivered",
+            delivered_at=datetime.now(timezone.utc),
+        )
+        session.add(delivery)
+        session.commit()
 
     @staticmethod
-    def _format_position_review_message(signal, candidate, position, pnl_pct: float | None) -> str:
-        lines = [
-            f"[{signal.alert_priority.value.upper()}] {position.symbol}",
-            f"Recomendacion manual: {signal.manual_recommendation}",
-            f"Modo: {signal.execution_mode}",
-            f"Fuente: {candidate.source}",
-            f"Tipo: {signal.signal_type.value}",
-            f"Bucket: {signal.bucket}",
-            f"Riesgo: {signal.risk_level}",
-            f"Entrada: ${position.entry_price:,.4f}",
-        ]
-        if candidate.current_price is not None:
-            lines.append(f"Precio actual: ${candidate.current_price:,.4f}")
-        if pnl_pct is not None:
-            lines.append(f"Rendimiento desde entrada: {pnl_pct:+.2f}%")
-        if position.target_price is not None:
-            lines.append(f"Objetivo: ${position.target_price:,.4f}")
-        if position.stop_price is not None:
-            lines.append(f"Stop: ${position.stop_price:,.4f}")
-        lines.append("")
-        lines.append(f"Resumen: {signal.summary}")
-        lines.append(f"A favor de revisar/vender: {', '.join(signal.reasons_for[:3])}.")
-        if signal.reasons_against:
-            lines.append(f"Puntos para no precipitarse: {', '.join(signal.reasons_against[:2])}.")
-        lines.append(f"Siguiente paso sugerido: {signal.action_hint}.")
-        return "\n".join(lines)
+    def _alerts_sent_last_24h(session: Session, profile_id: int) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        deliveries = list(
+            session.scalars(
+                select(AlertDelivery)
+                .join(SignalSnapshot, SignalSnapshot.id == AlertDelivery.signal_snapshot_id)
+                .where(SignalSnapshot.profile_id == profile_id)
+                .where(AlertDelivery.delivered_at >= cutoff)
+            )
+        )
+        return len(deliveries)

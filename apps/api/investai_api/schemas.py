@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from apps.api.investai_api.models import AlertPriority, AssetType, SignalType
+from apps.api.investai_api.models import AlertPriority, AssetType, PaperTradeStatus, SignalOutcomeStatus, SignalType
 
 
 class ProfileBootstrapRequest(BaseModel):
@@ -70,6 +70,30 @@ class PositionRead(BaseModel):
     theme: str | None
     status: str
     opened_at: datetime
+
+
+class PositionCloseRequest(BaseModel):
+    telegram_chat_id: str | None = None
+    profile_id: int | None = None
+    symbol: str
+    exit_price: float
+    note: str | None = None
+
+
+class PositionCloseRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    profile_id: int
+    position_id: int
+    symbol: str
+    asset_type: str
+    entry_price: float
+    exit_price: float
+    quantity: float | None
+    return_pct: float
+    note: str | None
+    closed_at: datetime
 
 
 class CandidateInput(BaseModel):
@@ -162,6 +186,69 @@ class SignalRead(BaseModel):
     reasons_for: list[str]
     reasons_against: list[str]
     subscores: dict[str, float]
+
+
+class SignalOutcomeRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    signal_snapshot_id: int
+    symbol: str
+    asset_type: str
+    source: str
+    bucket: str | None
+    signal_type: str
+    entry_price: float
+    evaluation_horizon_hours: int
+    status: SignalOutcomeStatus
+    outcome_price: float | None
+    return_pct: float | None
+    outcome_label: str | None
+    created_at: datetime
+    evaluated_at: datetime | None
+
+
+class PaperTradeRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    profile_id: int
+    open_signal_snapshot_id: int
+    close_signal_snapshot_id: int | None
+    symbol: str
+    asset_type: str
+    source: str
+    bucket: str | None
+    status: PaperTradeStatus
+    entry_price: float
+    exit_price: float | None
+    return_pct: float | None
+    opened_at: datetime
+    closed_at: datetime | None
+
+
+class AnalyticsBucketRead(BaseModel):
+    resolved_count: int
+    win_rate: float | None
+    avg_return_pct: float | None
+
+
+class SignalAnalyticsRead(BaseModel):
+    resolved_count: int
+    pending_count: int
+    win_rate: float | None
+    avg_return_pct: float | None
+    best_return_pct: float | None
+    worst_return_pct: float | None
+    by_bucket: dict[str, AnalyticsBucketRead]
+    closed_positions_count: int
+    closed_positions_avg_return_pct: float | None
+    paper_trades_closed_count: int
+    paper_trades_open_count: int
+    paper_trades_win_rate: float | None
+    paper_trades_avg_return_pct: float | None
+    recent_paper_trades: list[PaperTradeRead] = Field(default_factory=list)
+    recent_outcomes: list[SignalOutcomeRead] = Field(default_factory=list)
 
 
 class TelegramWebhookResponse(BaseModel):

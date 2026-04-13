@@ -3,8 +3,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from apps.api.investai_api.models import Position, PositionStatus, UserProfile
-from apps.api.investai_api.schemas import PositionCreate
+from apps.api.investai_api.models import Position, PositionCloseEvent, PositionStatus, UserProfile
+from apps.api.investai_api.schemas import PositionCloseRequest, PositionCreate
 
 
 class PortfolioService:
@@ -44,6 +44,37 @@ class PortfolioService:
             .order_by(Position.opened_at.desc())
         )
         return session.scalar(statement)
+
+    def close_position(self, session: Session, profile: UserProfile, payload: PositionCloseRequest) -> PositionCloseEvent:
+        position = self.get_open_position_by_symbol(session, profile.id, payload.symbol)
+        if not position:
+            raise ValueError(f"No hay una posicion abierta en {payload.symbol.upper()}.")
+        return_pct = ((payload.exit_price - position.entry_price) / position.entry_price) * 100 if position.entry_price else 0.0
+        close_event = PositionCloseEvent(
+            profile_id=profile.id,
+            position_id=position.id,
+            symbol=position.symbol,
+            asset_type=position.asset_type,
+            entry_price=position.entry_price,
+            exit_price=payload.exit_price,
+            quantity=position.quantity,
+            return_pct=return_pct,
+            note=payload.note,
+        )
+        position.status = PositionStatus.CLOSED.value
+        session.add(close_event)
+        session.commit()
+        session.refresh(close_event)
+        return close_event
+
+    def list_closed_events(self, session: Session, profile_id: int, limit: int = 20) -> list[PositionCloseEvent]:
+        statement = (
+            select(PositionCloseEvent)
+            .where(PositionCloseEvent.profile_id == profile_id)
+            .order_by(PositionCloseEvent.closed_at.desc())
+            .limit(limit)
+        )
+        return list(session.scalars(statement))
 
     @staticmethod
     def render_positions(positions: list[Position]) -> str:

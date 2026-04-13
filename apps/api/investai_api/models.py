@@ -32,6 +32,16 @@ class PositionStatus(str, Enum):
     CLOSED = "closed"
 
 
+class SignalOutcomeStatus(str, Enum):
+    PENDING = "pending"
+    RESOLVED = "resolved"
+
+
+class PaperTradeStatus(str, Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
@@ -115,3 +125,73 @@ class AlertDelivery(Base):
     status: Mapped[str] = mapped_column(String(32), default="queued")
     vendor_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PositionCloseEvent(Base):
+    __tablename__ = "position_close_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    position_id: Mapped[int] = mapped_column(ForeignKey("positions.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    asset_type: Mapped[str] = mapped_column(String(16))
+    entry_price: Mapped[float] = mapped_column(Float)
+    exit_price: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_pct: Mapped[float] = mapped_column(Float)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class SignalOutcome(Base):
+    __tablename__ = "signal_outcomes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    signal_snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("signal_snapshots.id", ondelete="CASCADE"),
+        index=True,
+    )
+    profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    asset_type: Mapped[str] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(String(32))
+    bucket: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    signal_type: Mapped[str] = mapped_column(String(32), index=True)
+    entry_price: Mapped[float] = mapped_column(Float)
+    evaluation_horizon_hours: Mapped[int] = mapped_column(Integer, default=24)
+    status: Mapped[str] = mapped_column(String(16), default=SignalOutcomeStatus.PENDING.value, index=True)
+    outcome_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    outcome_label: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PaperTrade(Base):
+    __tablename__ = "paper_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    open_signal_snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("signal_snapshots.id", ondelete="CASCADE"),
+        index=True,
+    )
+    close_signal_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("signal_snapshots.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    asset_type: Mapped[str] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(String(32))
+    bucket: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default=PaperTradeStatus.OPEN.value, index=True)
+    entry_price: Mapped[float] = mapped_column(Float)
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

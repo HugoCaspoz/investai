@@ -9,14 +9,18 @@ from apps.api.investai_api.db import get_session
 from apps.api.investai_api.schemas import (
     CandidateInput,
     DiscoveryRequest,
+    PositionCloseRead,
+    PositionCloseRequest,
     PositionCreate,
     PositionRead,
     ProfileBootstrapRequest,
     ProfileRead,
     RankedCandidateResponse,
+    SignalAnalyticsRead,
     SignalEvaluationRequest,
     SignalRead,
 )
+from apps.api.investai_api.services.analytics_service import AnalyticsService
 from apps.api.investai_api.services.discovery_service import DiscoveryService
 from apps.api.investai_api.services.job_service import JobService
 from apps.api.investai_api.services.market_data_service import MarketDataService
@@ -32,6 +36,7 @@ discovery_service = DiscoveryService()
 signal_engine = SignalEngine()
 job_service = JobService()
 market_data_service = MarketDataService()
+analytics_service = AnalyticsService()
 settings = get_settings()
 
 
@@ -78,6 +83,21 @@ def list_positions(
     return portfolio_service.list_open_positions(session, profile.id)
 
 
+@router.post("/positions/close", response_model=PositionCloseRead)
+def close_position(payload: PositionCloseRequest, session: Session = Depends(get_session)) -> PositionCloseRead:
+    profile = profile_service.resolve_profile_or_create(
+        session,
+        profile_id=payload.profile_id,
+        telegram_chat_id=payload.telegram_chat_id,
+    )
+    if not profile:
+        raise HTTPException(status_code=400, detail="Profile context is required")
+    try:
+        return portfolio_service.close_position(session, profile, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/catalog/demo-candidates", response_model=list[CandidateInput])
 def demo_candidates() -> list[CandidateInput]:
     return [CandidateInput.model_validate(candidate) for candidate in DEMO_CANDIDATES]
@@ -121,6 +141,18 @@ async def live_diagnostics(
         "telegram_chat_id": profile.telegram_chat_id,
         **diagnostics,
     }
+
+
+@router.get("/analytics/signals", response_model=SignalAnalyticsRead)
+def signal_analytics(
+    telegram_chat_id: str | None = None,
+    profile_id: int | None = None,
+    session: Session = Depends(get_session),
+) -> SignalAnalyticsRead:
+    profile = profile_service.resolve_profile(session, profile_id=profile_id, telegram_chat_id=telegram_chat_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return analytics_service.build_signal_analytics(session, profile.id)
 
 
 async def _run_scan_job(

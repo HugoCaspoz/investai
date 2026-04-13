@@ -314,14 +314,30 @@ class MarketDataService:
         return candidates
 
     def build_signal_request(self, candidate: CandidateInput, telegram_chat_id: str | None) -> SignalEvaluationRequest:
-        technical_setup = self._clamp(
-            0.35
-            + 0.25 * candidate.catalyst_strength
-            + 0.20 * candidate.narrative_strength
-            + 0.20 * candidate.liquidity_score
+        change_24h = candidate.price_change_percentage_24h or 0.0
+        change_7d = candidate.price_change_percentage_7d or 0.0
+        has_weekly_data = candidate.price_change_percentage_7d is not None
+        trend_score = self._clamp(((change_7d if has_weekly_data else change_24h) + 6.0) / (18.0 if has_weekly_data else 12.0))
+        pullback_score = self._pullback_score(change_24h, change_7d if has_weekly_data else None)
+        overextension_score = max(
+            self._clamp((change_24h - 12.0) / 20.0),
+            self._clamp((change_7d - 25.0) / 45.0) if has_weekly_data else 0.0,
         )
-        relative_strength = self._clamp(((candidate.price_change_percentage_7d or 0.0) + 5.0) / 18.0)
-        pullback_quality = self._clamp(0.55 + 0.25 * candidate.narrative_strength - 0.10 * candidate.volatility_score)
+        sharp_drop_score = max(
+            self._clamp((-change_24h - 5.0) / 10.0),
+            self._clamp((-change_7d - 12.0) / 18.0) if has_weekly_data else 0.0,
+        )
+        technical_setup = self._clamp(
+            0.20
+            + 0.28 * trend_score
+            + 0.24 * pullback_score
+            + 0.16 * candidate.liquidity_score
+            + 0.12 * candidate.narrative_strength
+            - 0.20 * overextension_score
+            - 0.12 * sharp_drop_score
+        )
+        relative_strength = self._clamp(0.55 * trend_score + 0.45 * self._clamp((change_24h + 4.0) / 10.0))
+        pullback_quality = self._clamp(0.25 + 0.55 * pullback_score + 0.10 * candidate.narrative_strength - 0.20 * overextension_score)
         volume_confirmation = candidate.liquidity_score
         regime_alignment = 0.65 if "crypto" in candidate.themes else 0.58
         context_notes = [f"source={candidate.source}"]
@@ -329,6 +345,10 @@ class MarketDataService:
             context_notes.append(f"market_cap={candidate.market_cap:.0f}")
         if candidate.dollar_volume is not None:
             context_notes.append(f"dollar_volume={candidate.dollar_volume:.0f}")
+        if overextension_score > 0:
+            context_notes.append(f"overextension_score={overextension_score:.2f}")
+        if sharp_drop_score > 0:
+            context_notes.append(f"sharp_drop_score={sharp_drop_score:.2f}")
 
         return SignalEvaluationRequest(
             telegram_chat_id=telegram_chat_id,
@@ -350,6 +370,9 @@ class MarketDataService:
             narrative_strength=candidate.narrative_strength,
             liquidity_quality=candidate.liquidity_score,
             regime_alignment=regime_alignment,
+            technical_deterioration=sharp_drop_score,
+            target_or_extension_score=overextension_score,
+            event_risk=self._clamp(0.10 + 0.25 * candidate.volatility_score + 0.30 * overextension_score),
             volatility_score=candidate.volatility_score,
             context_notes=context_notes,
         )
@@ -555,6 +578,18 @@ class MarketDataService:
             item for item in THEMATIC_EQUITY_UNIVERSE if preferred_themes.intersection(item["themes"])
         ]
         return selected or THEMATIC_EQUITY_UNIVERSE
+
+    @staticmethod
+    def _pullback_score(change_24h: float, change_7d: float | None) -> float:
+        if -3.5 <= change_24h <= 1.5 and (change_7d is None or change_7d >= -6.0):
+            return 1.0
+        if 1.5 < change_24h <= 7.0:
+            return 0.72
+        if -6.0 <= change_24h < -3.5 and (change_7d is None or change_7d >= 0.0):
+            return 0.55
+        if change_24h > 12.0:
+            return 0.10
+        return 0.35
 
     @staticmethod
     def _infer_crypto_themes(coin_id: str, symbol: str, name: str) -> list[str]:
